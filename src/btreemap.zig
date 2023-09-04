@@ -37,14 +37,14 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
             } else return;
 
             while (stack.popOrNull()) |node| {
-                if (!node.isLeaf()) {
+                if (node.edges) |edges| {
                     var i: usize = 0;
                     while (i < node.len + 1) : (i += 1) {
-                        try stack.append(node.edges[i].?);
+                        try stack.append(edges[i].?);
                     }
                 }
-                if (!node.isLeaf()) {
-                    self.allocator.free(node.edges);
+                if (node.edges) |edges| {
+                    self.allocator.destroy(edges);
                 }
                 self.allocator.destroy(node);
             }
@@ -99,7 +99,7 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                     return node.swapValue(search_result.index, value);
                 }
                 // Not found, go deeper.
-                current = if (!node.isLeaf()) node.edges[search_result.index] else null;
+                current = if (node.edges) |edges| edges[search_result.index] else null;
                 try stack.append(.{
                     .node = node,
                     .index = search_result.index,
@@ -147,10 +147,10 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                         split_result_unwrapped.key,
                         split_result_unwrapped.value,
                     );
-                    new_root.edges = try self.allocator.alloc(?*Node, 2 * B);
-                    new_root.edges[0] = self.root;
-                    new_root.edges[1] = split_result_unwrapped.edge;
-                    @memset(new_root.edges[2..], null);
+                    new_root.edges = try self.allocator.create([2 * B]?*Node);
+                    new_root.edges.?[0] = self.root;
+                    new_root.edges.?[1] = split_result_unwrapped.edge;
+                    @memset(new_root.edges.?[2..], null);
 
                     self.root = new_root;
                     return null;
@@ -183,7 +183,7 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                     .node = node,
                     .index = search_result.index,
                 });
-                current = if (!node.isLeaf()) node.edges[search_result.index] else null;
+                current = if (node.edges) |edges| edges[search_result.index] else null;
                 if (search_result.found) break;
             } else {
                 // Key not found.
@@ -196,7 +196,7 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                     .node = node,
                     .index = 0,
                 });
-                current = if (node.isLeaf()) null else node.edges[0];
+                current = if (node.edges) |edges| edges[0] else null;
             }
             // Reached leaf node. Stack is complete.
 
@@ -238,9 +238,9 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                     // We reached the root.
                     if (self.root.?.len == 0) {
                         // If root is empty, replace with merged node.
-                        const new_root = current_stack.node.edges[0].?;
-                        if (!self.root.?.isLeaf()) {
-                            self.allocator.free(self.root.?.edges);
+                        const new_root = current_stack.node.edges.?[0].?;
+                        if (self.root.?.edges) |edges| {
+                            self.allocator.destroy(edges);
                         }
                         self.allocator.destroy(self.root.?);
                         self.root.? = new_root;
@@ -277,7 +277,7 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                 while (it.topStackItem()) |item| {
                     if (!item.node.isLeaf() and !it.backwards) {
                         // Child exists at index or going forward, go deeper.
-                        var child = item.node.edges[item.index].?;
+                        var child = item.node.edges.?[item.index].?;
                         try it.stack.append(StackItem{
                             .node = child,
                             .index = 0,
@@ -336,7 +336,7 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                 item = &stack.items[stack.items.len - 1];
                 if (!item.node.isLeaf() and !backwards) {
                     // Go deeper.
-                    var child = item.node.edges[item.index].?;
+                    var child = item.node.edges.?[item.index].?;
 
                     child.assertValidity();
 

@@ -12,7 +12,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
         keys: [2 * B - 1]K,
         values: [2 * B - 1]V,
         len: usize,
-        edges: []?*Self,
+        edges: ?*[2 * B]?*Self,
 
         // Return Type for Node's search method.
         pub const SearchResult = struct {
@@ -42,7 +42,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 .keys = [_]K{undefined} ** (2 * B - 1),
                 .values = [_]V{undefined} ** (2 * B - 1),
                 .len = 0,
-                .edges = &.{},
+                .edges = null,
             };
             return out;
         }
@@ -133,7 +133,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             const out = KVE{
                 .key = self.keys[index],
                 .value = self.values[index],
-                .edge = if (!self.isLeaf()) self.edges[index + 1] else null,
+                .edge = if (self.edges) |edges| edges[index + 1] else null,
             };
 
             std.mem.copy(
@@ -150,13 +150,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             self.keys[self.len - 1] = undefined;
             self.values[self.len - 1] = undefined;
 
-            if (!self.isLeaf()) {
+            if (self.edges) |edges| {
                 std.mem.copy(
                     ?*Self,
-                    self.edges[index + 1 ..],
-                    self.edges[index + 2 .. self.len + 1],
+                    edges[index + 1 ..],
+                    edges[index + 2 .. self.len + 1],
                 );
-                self.edges[self.len] = null;
+                edges[self.len] = null;
             }
 
             self.len -= 1;
@@ -174,7 +174,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             const out = KVE{
                 .key = self.keys[0],
                 .value = self.values[0],
-                .edge = if (self.isLeaf()) null else self.edges[0],
+                .edge = if (self.edges) |edges| edges[0] else null,
             };
 
             std.mem.copy(
@@ -191,13 +191,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             self.keys[self.len - 1] = undefined;
             self.values[self.len - 1] = undefined;
 
-            if (!self.isLeaf()) {
+            if (self.edges) |edges| {
                 std.mem.copy(
                     ?*Self,
-                    self.edges[0..],
-                    self.edges[1 .. self.len + 1],
+                    edges[0..],
+                    edges[1 .. self.len + 1],
                 );
-                self.edges[self.len] = null;
+                edges[self.len] = null;
             }
             self.len -= 1;
             return out;
@@ -221,13 +221,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             );
             self.values[index] = value;
 
-            if (!self.isLeaf()) {
+            if (self.edges) |edges| {
                 std.mem.copyBackwards(
                     ?*Self,
-                    self.edges[index + 2 .. self.len + 2],
-                    self.edges[index + 1 .. self.len + 1],
+                    edges[index + 2 .. self.len + 2],
+                    edges[index + 1 .. self.len + 1],
                 );
-                self.edges[index + 1] = edge;
+                edges[index + 1] = edge;
             }
 
             self.len += 1;
@@ -237,8 +237,8 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
         fn insertAtEnd(self: *Self, key: K, value: V, edge: ?*Self) void {
             self.keys[self.len] = key;
             self.values[self.len] = value;
-            if (!self.isLeaf()) {
-                self.edges[self.len + 1] = edge;
+            if (self.edges) |edges| {
+                edges[self.len + 1] = edge;
             } else {
                 assert(edge == null);
             }
@@ -263,13 +263,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             );
             self.values[0] = value;
 
-            if (!self.isLeaf()) {
+            if (self.edges) |edges| {
                 std.mem.copyBackwards(
                     ?*Self,
-                    self.edges[1 .. self.len + 2],
-                    self.edges[0 .. self.len + 1],
+                    edges[1 .. self.len + 2],
+                    edges[0 .. self.len + 1],
                 );
-                self.edges[0] = edge;
+                edges[0] = edge;
             }
 
             self.len += 1;
@@ -284,11 +284,11 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             // No edge right of index.
             if (index == self.len) return false;
 
-            var giver = self.edges[index + 1].?;
+            var giver = self.edges.?[index + 1].?;
 
             if (giver.len > B - 1) {
                 // Right edge can spare one.
-                var taker = self.edges[index].?;
+                var taker = self.edges.?[index].?;
 
                 const from_giver: KVE = giver.removeFromBeginning();
                 taker.insertAtEnd(self.keys[index], self.values[index], from_giver.edge);
@@ -306,11 +306,11 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             // No edge left of index.
             if (index == 0) return false;
 
-            var giver = self.edges[index - 1].?;
+            var giver = self.edges.?[index - 1].?;
 
             if (giver.len > B - 1) {
                 // Right edge can spare one.
-                var taker = self.edges[index].?;
+                var taker = self.edges.?[index].?;
 
                 const from_giver: KVE = giver.removeFromEnd();
                 taker.insertAtBeginning(self.keys[index - 1], self.values[index - 1], from_giver.edge);
@@ -323,7 +323,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
         /// It merges two edges together and puts the middle KV of the parent in between.
         /// The right node is merged into the left and the right is destroyed afterwards.
         pub fn mergeEdges(self: *Self, allocator: Allocator, left_edge_index: usize) void {
-            var left = self.edges[left_edge_index].?;
+            var left = self.edges.?[left_edge_index].?;
             const removed = self.remove(left_edge_index);
 
             left.insertAtEnd(removed.key, removed.value, null);
@@ -338,13 +338,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 left.values[left.len..],
                 removed.edge.?.values[0..removed.edge.?.len],
             );
-            if (!removed.edge.?.isLeaf()) {
+            if (removed.edge.?.edges) |edges| {
                 std.mem.copyBackwards(
                     ?*Self,
-                    left.edges[left.len..],
-                    removed.edge.?.edges[0 .. removed.edge.?.len + 1],
+                    left.edges.?[left.len..],
+                    edges[0 .. removed.edge.?.len + 1],
                 );
-                allocator.free(removed.edge.?.edges);
+                allocator.destroy(edges);
             }
 
             left.len += removed.edge.?.len;
@@ -366,14 +366,14 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 allocator,
                 self.keys[median + 1 .. self.len],
                 self.values[median + 1 .. self.len],
-                if (!self.isLeaf()) self.edges[median + 1 .. self.len + 1] else null,
+                if (self.edges) |edges| edges[median + 1 .. self.len + 1] else null,
             );
 
             // shrink original node
             @memset(self.keys[median..], undefined);
             @memset(self.values[median..], undefined);
-            if (!self.isLeaf()) {
-                @memset(self.edges[median + 1 ..], null);
+            if (self.edges) |edges| {
+                @memset(edges[median + 1 ..], null);
             }
             self.len = median;
 
@@ -389,16 +389,16 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             std.mem.copyBackwards(K, out.keys[0..], keys);
             std.mem.copyBackwards(V, out.values[0..], values);
             if (edges) |e| {
-                out.edges = try allocator.alloc(?*Self, 2 * B);
-                std.mem.copyBackwards(?*Self, out.edges[0..], e);
-                @memset(out.edges[e.len..], null);
+                out.edges = try allocator.create([2 * B]?*Self);
+                std.mem.copyBackwards(?*Self, out.edges.?[0..], e);
+                @memset(out.edges.?[e.len..], null);
             }
             out.len = keys.len;
             return out;
         }
 
         pub fn isLeaf(self: Self) bool {
-            return self.edges.len == 0;
+            return self.edges == null;
         }
 
         pub fn isFull(self: Self) bool {
@@ -416,10 +416,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 assert(meta.lt(self.keys[i], self.keys[i + 1]));
             }
 
+            // If node is leaf we are done here.
+            if (self.isLeaf()) return;
+
             // Number of edges
             var count: u32 = 0;
             var encountered_null = false;
-            for (self.edges) |edge| {
+            for (self.edges.?) |edge| {
                 if (edge) |_| {
                     assert(encountered_null == false);
                     count += 1;
@@ -429,16 +432,13 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             }
             assert(count == self.len + 1 or count == 0);
 
-            // If node is leaf we are done here.
-            if (self.isLeaf()) return;
-
             // Edges left smaller and right larger
             for (self.keys[0..self.len], 0..) |key, i| {
-                const left_edge = self.edges[i].?;
+                const left_edge = self.edges.?[i].?;
                 const imm_left_key = left_edge.keys[left_edge.len - 1];
                 assert(meta.gt(key, imm_left_key));
 
-                const right_edge = self.edges[i + 1].?;
+                const right_edge = self.edges.?[i + 1].?;
                 const imm_right_key = right_edge.keys[0];
                 assert(meta.lt(key, imm_right_key));
             }
