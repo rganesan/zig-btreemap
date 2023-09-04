@@ -12,7 +12,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
         keys: [2 * B - 1]K,
         values: [2 * B - 1]V,
         len: usize,
-        edges: [2 * B]?*Self,
+        edges: []?*Self,
 
         // Return Type for Node's search method.
         pub const SearchResult = struct {
@@ -42,7 +42,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 .keys = [_]K{undefined} ** (2 * B - 1),
                 .values = [_]V{undefined} ** (2 * B - 1),
                 .len = 0,
-                .edges = [_]?*Self{null} ** (2 * B),
+                .edges = &.{},
             };
             return out;
         }
@@ -133,7 +133,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             const out = KVE{
                 .key = self.keys[index],
                 .value = self.values[index],
-                .edge = self.edges[index + 1],
+                .edge = if (!self.isLeaf()) self.edges[index + 1] else null,
             };
 
             std.mem.copy(
@@ -174,7 +174,7 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             const out = KVE{
                 .key = self.keys[0],
                 .value = self.values[0],
-                .edge = self.edges[0],
+                .edge = if (self.isLeaf()) null else self.edges[0],
             };
 
             std.mem.copy(
@@ -237,7 +237,11 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
         fn insertAtEnd(self: *Self, key: K, value: V, edge: ?*Self) void {
             self.keys[self.len] = key;
             self.values[self.len] = value;
-            self.edges[self.len + 1] = edge;
+            if (!self.isLeaf()) {
+                self.edges[self.len + 1] = edge;
+            } else {
+                assert(edge == null);
+            }
             self.len += 1;
         }
 
@@ -334,11 +338,14 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 left.values[left.len..],
                 removed.edge.?.values[0..removed.edge.?.len],
             );
-            std.mem.copyBackwards(
-                ?*Self,
-                left.edges[left.len..],
-                removed.edge.?.edges[0 .. removed.edge.?.len + 1],
-            );
+            if (!removed.edge.?.isLeaf()) {
+                std.mem.copyBackwards(
+                    ?*Self,
+                    left.edges[left.len..],
+                    removed.edge.?.edges[0 .. removed.edge.?.len + 1],
+                );
+                allocator.free(removed.edge.?.edges);
+            }
 
             left.len += removed.edge.?.len;
 
@@ -359,13 +366,15 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 allocator,
                 self.keys[median + 1 .. self.len],
                 self.values[median + 1 .. self.len],
-                self.edges[median + 1 .. self.len + 1],
+                if (!self.isLeaf()) self.edges[median + 1 .. self.len + 1] else null,
             );
 
             // shrink original node
             @memset(self.keys[median..], undefined);
             @memset(self.values[median..], undefined);
-            @memset(self.edges[median + 1 ..], null);
+            if (!self.isLeaf()) {
+                @memset(self.edges[median + 1 ..], null);
+            }
             self.len = median;
 
             return KVE{
@@ -375,17 +384,21 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             };
         }
 
-        fn createFromSlices(allocator: Allocator, keys: []K, values: []V, edges: []?*Self) !*Self {
+        fn createFromSlices(allocator: Allocator, keys: []K, values: []V, edges: ?[]?*Self) !*Self {
             var out = try Self.createEmpty(allocator);
             std.mem.copyBackwards(K, out.keys[0..], keys);
             std.mem.copyBackwards(V, out.values[0..], values);
-            std.mem.copyBackwards(?*Self, out.edges[0..], edges);
+            if (edges) |e| {
+                out.edges = try allocator.alloc(?*Self, 2 * B);
+                std.mem.copyBackwards(?*Self, out.edges[0..], e);
+                @memset(out.edges[e.len..], null);
+            }
             out.len = keys.len;
             return out;
         }
 
         pub fn isLeaf(self: Self) bool {
-            return self.edges[0] == null;
+            return self.edges.len == 0;
         }
 
         pub fn isFull(self: Self) bool {
