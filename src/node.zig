@@ -11,8 +11,10 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
 
         keys: [2 * B - 1]K,
         values: [2 * B - 1]V,
-        len: usize,
         edges: ?*[2 * B]?*Self,
+        parent: ?*Self,
+        len: u16,
+        parent_idx: i16, // index in parent, valid only if parent is non-null
 
         // Return Type for Node's search method.
         pub const SearchResult = struct {
@@ -42,7 +44,9 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 .keys = [_]K{undefined} ** (2 * B - 1),
                 .values = [_]V{undefined} ** (2 * B - 1),
                 .len = 0,
+                .parent_idx = -1,
                 .edges = null,
+                .parent = null,
             };
             return out;
         }
@@ -157,6 +161,10 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                     edges[index + 2 .. self.len + 1],
                 );
                 edges[self.len] = null;
+                // update parent_idx in the children
+                for ((index + 1)..self.len) |i| {
+                    edges[i].?.parent_idx = @intCast(i);
+                }
             }
 
             self.len -= 1;
@@ -198,6 +206,10 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                     edges[1 .. self.len + 1],
                 );
                 edges[self.len] = null;
+                // update parent_idx in the children
+                for (0..(self.len)) |i| {
+                    edges[i].?.parent_idx = @intCast(i);
+                }
             }
             self.len -= 1;
             return out;
@@ -228,6 +240,11 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                     edges[index + 1 .. self.len + 1],
                 );
                 edges[index + 1] = edge;
+                edge.?.parent = self;
+                // update parent_idx in the children
+                for ((index + 1)..self.len + 2) |i| {
+                    edges[i].?.parent_idx = @as(i16, @intCast(i));
+                }
             }
 
             self.len += 1;
@@ -239,6 +256,10 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             self.values[self.len] = value;
             if (self.edges) |edges| {
                 edges[self.len + 1] = edge;
+                if (edge) |edge_unwrapped| {
+                    edge_unwrapped.parent = self;
+                    edge_unwrapped.parent_idx = @intCast(self.len + 1);
+                }
             } else {
                 assert(edge == null);
             }
@@ -270,6 +291,11 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                     edges[0 .. self.len + 1],
                 );
                 edges[0] = edge;
+                edge.?.parent = self;
+                // update parent_idx in the children
+                for (0..(self.len + 2)) |i| {
+                    edges[i].?.parent_idx = @intCast(i);
+                }
             }
 
             self.len += 1;
@@ -344,6 +370,12 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                     left.edges.?[left.len..],
                     edges[0 .. removed.edge.?.len + 1],
                 );
+                // reparent the new children
+                for (edges[0 .. removed.edge.?.len + 1], left.len..) |edge, i| {
+                    edge.?.parent = left;
+                    edge.?.parent_idx = @intCast(i);
+                }
+
                 allocator.destroy(edges);
             }
 
@@ -367,6 +399,8 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 self.keys[median + 1 .. self.len],
                 self.values[median + 1 .. self.len],
                 if (self.edges) |edges| edges[median + 1 .. self.len + 1] else null,
+                self.parent,
+                if (self.parent != null) self.parent_idx + 1 else -1,
             );
 
             // shrink original node
@@ -384,16 +418,23 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
             };
         }
 
-        fn createFromSlices(allocator: Allocator, keys: []K, values: []V, edges: ?[]?*Self) !*Self {
+        fn createFromSlices(allocator: Allocator, keys: []K, values: []V, edges: ?[]?*Self, parent: ?*Self, parent_idx: i16) !*Self {
             var out = try Self.createEmpty(allocator);
             std.mem.copyBackwards(K, out.keys[0..], keys);
             std.mem.copyBackwards(V, out.values[0..], values);
-            if (edges) |e| {
+            if (edges) |edges_unwrapped| {
                 out.edges = try allocator.create([2 * B]?*Self);
-                std.mem.copyBackwards(?*Self, out.edges.?[0..], e);
-                @memset(out.edges.?[e.len..], null);
+                std.mem.copyBackwards(?*Self, out.edges.?[0..], edges_unwrapped);
+                @memset(out.edges.?[edges_unwrapped.len..], null);
+                // reparent the children
+                for (edges_unwrapped, 0..) |edge, i| {
+                    edge.?.parent = out;
+                    edge.?.parent_idx = @intCast(i);
+                }
             }
-            out.len = keys.len;
+            out.parent = parent;
+            out.parent_idx = parent_idx;
+            out.len = @intCast(keys.len);
             return out;
         }
 
@@ -437,6 +478,8 @@ pub fn Node(comptime K: type, comptime V: type, comptime B: u32) type {
                 const left_edge = self.edges.?[i].?;
                 const imm_left_key = left_edge.keys[left_edge.len - 1];
                 assert(meta.gt(key, imm_left_key));
+                assert(self.edges.?[i].?.parent == self);
+                assert(self.edges.?[i].?.parent_idx == i);
 
                 const right_edge = self.edges.?[i + 1].?;
                 const imm_right_key = right_edge.keys[0];

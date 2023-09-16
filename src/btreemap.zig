@@ -89,7 +89,7 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
             defer stack.deinit();
 
             // Traverse tree until we find the key or hit bottom.
-            // If we we find the key, swap new with old value and return the old.
+            // If we find the key, swap new with old value and return the old.
             // Build a stack to remember the path
             var current = self.root;
             var search_result: SearchResult = undefined;
@@ -123,6 +123,8 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                 return null;
             }
 
+            // defer self.assertValidity() catch unreachable;
+
             // Split was necessary -> move down on stack.
             // The current node in stack was incorporated in the tree and the SplitResult.
             stack_next = stack.popOrNull();
@@ -149,7 +151,11 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
                     );
                     new_root.edges = try self.allocator.create([2 * B]?*Node);
                     new_root.edges.?[0] = self.root;
+                    new_root.edges.?[0].?.parent = new_root;
+                    new_root.edges.?[0].?.parent_idx = 0;
                     new_root.edges.?[1] = split_result_unwrapped.edge;
+                    new_root.edges.?[1].?.parent = new_root;
+                    new_root.edges.?[1].?.parent_idx = 1;
                     @memset(new_root.edges.?[2..], null);
 
                     self.root = new_root;
@@ -208,17 +214,19 @@ pub fn BTreeMap(comptime K: type, comptime V: type) type {
             found_key_ptr.?.* = current_stack.node.keys[current_stack.index];
             found_value_ptr.?.* = current_stack.node.values[current_stack.index];
 
-            // Now ew can remove the key-value pair in the leaf. This can result in an underflow,
+            // Now we can remove the key-value pair in the leaf. This can result in an underflow,
             // which is handled below.
             _ = current_stack.node.remove(current_stack.index);
 
             // If our leaf is also the root, it cannot underflow.
             if (current_stack.node == self.root) return out;
 
+            // defer self.assertValidity() catch unreachable;
+
             // Fix underflow and move down the stack until underflow is fixed.
             while (current_stack.node.isLacking()) {
                 // We have an underflow in the current stack position. This is fixed
-                // from the parent's erspective, so move down the stack.
+                // from the parent's perspective, so move down the stack.
                 current_stack = stack.pop();
 
                 // Try to borrow, first from right, then from left.
